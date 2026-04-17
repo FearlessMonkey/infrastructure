@@ -1,0 +1,173 @@
+{
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-04-17T00:00:00Z",
+    "name": "Windrose Dedicated Server (Steam dedicated server + Wine)",
+    "author": "community@local",
+    "description": "Installs the Windrose Dedicated Server (Steam AppID 4129620) via authenticated SteamCMD and runs StartServerForeground.bat under Wine on Linux. Players join via InviteCode.",
+    "features": [
+        "steam_disk_space"
+    ],
+    "docker_images": {
+        "Wine (recommended)": "ghcr.io/parkervcp/yolks:wine_latest"
+    },
+    "file_denylist": [],
+    "startup": "bash -lc 'cd /home/container || exit 1; export WINEPREFIX=/home/container/.wine; if [[ ! -f .wine_prereqs_done ]]; then if [[ ! -x ./winetricks ]]; then echo \"Downloading winetricks...\"; curl -fsSL https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks -o ./winetricks && chmod +x ./winetricks; fi; if [[ -x ./winetricks ]]; then echo \"Running winetricks vcrun2022...\"; if command -v xvfb-run >/dev/null 2>&1; then WINEDEBUG=-all xvfb-run -a ./winetricks -q vcrun2022; else WINEDEBUG=-all ./winetricks -q vcrun2022; fi; if [[ $? -eq 0 ]]; then touch .wine_prereqs_done; echo \"VC++ runtime installed.\"; else echo \"winetricks failed; continuing anyway.\"; fi; else echo \"winetricks unavailable; skipping.\"; fi; fi; if [[ ! -x ./start-windrose.sh ]]; then echo \"start-windrose.sh missing; reinstall the server.\"; exit 1; fi; exec ./start-windrose.sh'",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n  \"done\": \"\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nset -euo pipefail\n\ncd /mnt/server\n\n# 1) Always (re)write start-windrose.sh FIRST so a SteamCMD failure doesn't\n#    leave the next boot without a launcher.\ncat > /mnt/server/start-windrose.sh <<'SH'\n#!/usr/bin/env bash\nset -euo pipefail\n\ncd /home/container\nexport WINEDEBUG=\"${WINEDEBUG:--all}\"\nexport STEAM_APPID=\"${STEAM_APPID:-4129620}\"\nexport SteamAppId=\"$STEAM_APPID\"\nexport SteamGameId=\"$STEAM_APPID\"\n\n# Find the launch target. Prefer the official foreground batch file so\n# Windrose starts with the same wrapper the dedicated server package ships.\nSTART_BAT=\"\"\nfor cand in   \"./R5/Builds/WindowsServer/StartServerForeground.bat\"   \"./R5/Builds/WindroseServer/StartServerForeground.bat\"   \"./StartServerForeground.bat\"   \"./R5/StartServerForeground.bat\"; do\n  if [[ -f \"$cand\" ]]; then\n    START_BAT=\"$cand\"\n    break\n  fi\ndone\n\n# Fall back to a direct executable launch only if the foreground batch file\n# is missing.\nSERVER_EXE=\"\"\nif [[ -z \"$START_BAT\" ]]; then\n  for cand in     \"./R5/Builds/WindowsServer/WindroseServer.exe\"     \"./R5/Builds/WindroseServer/WindroseServer.exe\"     \"./WindroseServer.exe\"     \"./R5/WindroseServer.exe\"     \"./R5/Builds/WindowsServer/R5/Binaries/Win64/WindroseServer-Win64-Shipping.exe\"     \"./R5/Builds/WindroseServer/R5/Binaries/Win64/WindroseServer-Win64-Shipping.exe\"     \"./R5/Binaries/Win64/WindroseServer-Win64-Shipping.exe\"; do\n    if [[ -f \"$cand\" ]]; then\n      SERVER_EXE=\"$cand\"\n      break\n    fi\n  done\nfi\n\nif [[ -z \"$SERVER_EXE\" && -z \"$START_BAT\" ]]; then\n  echo \"ERROR: neither WindroseServer.exe nor StartServerForeground.bat found.\"\n  echo \"Searching recursively...\"\n  find . -maxdepth 6 -type f \\( -iname \"WindroseServer.exe\" -o -iname \"WindroseServer-Win64-Shipping.exe\" -o -iname \"StartServerForeground.bat\" \\) -print || true\n  exit 1\nfi\n\n# Resolve absolute path + server directory BEFORE cd-ing so paths stay valid.\nif [[ -n \"$SERVER_EXE\" ]]; then\n  SERVER_ABS=\"$(cd \"$(dirname \"$SERVER_EXE\")\" && pwd)/$(basename \"$SERVER_EXE\")\"\nelse\n  SERVER_ABS=\"$(cd \"$(dirname \"$START_BAT\")\" && pwd)/$(basename \"$START_BAT\")\"\nfi\nSERVER_DIR=\"$(dirname \"$SERVER_ABS\")\"\nSERVER_NAMEONLY=\"$(basename \"$SERVER_ABS\")\"\n\necho \"Server root:  $SERVER_DIR\"\necho \"Launch target: $SERVER_NAMEONLY\"\n\n# cd into the server bundle so UE5 discovers Content/Paks and writes logs\n# to the expected Saved/Logs/ path.\ncd \"$SERVER_DIR\"\nprintf \"%s\\n\" \"${STEAM_APPID:-4129620}\" > steam_appid.txt\n\n# Seed/patch ServerDescription.json *inside the server root*, which is the\n# file the server actually reads and rewrites.\nif [[ ! -f \"ServerDescription.json\" ]]; then\n  cat > \"ServerDescription.json\" <<'JSON'\n{\n  \"Version\": 1,\n  \"DeploymentId\": \"\",\n  \"ServerDescription_Persistent\": {\n    \"PersistentServerId\": \"\",\n    \"InviteCode\": \"MyServer1\",\n    \"IsPasswordProtected\": false,\n    \"Password\": \"\",\n    \"ServerName\": \"Windrose Dedicated Server\",\n    \"WorldIslandId\": \"\",\n    \"MaxPlayerCount\": 4,\n    \"P2pProxyAddress\": \"\"\n  }\n}\nJSON\nfi\n\nif command -v python3 >/dev/null 2>&1; then\n  python3 - <<'PY'\nimport json\nimport os\n\npath = \"ServerDescription.json\"\nwith open(path, \"r\", encoding=\"utf-8\") as fp:\n    data = json.load(fp)\n\npersist = data.get(\"ServerDescription_Persistent\")\ntarget = persist if isinstance(persist, dict) else data\n\ndef read_env(name, default=None):\n    value = os.environ.get(name)\n    return default if value is None else value\n\ninvite = read_env(\"INVITE_CODE\", target.get(\"InviteCode\", \"MyServer1\"))\nserver_name = read_env(\"SERVER_NAME\", target.get(\"ServerName\", \"Windrose Dedicated Server\"))\nmax_players = read_env(\"MAX_PLAYERS\", target.get(\"MaxPlayerCount\", 4))\nproxy = read_env(\"P2P_PROXY_ADDRESS\", target.get(\"P2pProxyAddress\", \"\"))\npassword_mode = str(read_env(\"PASSWORD_PROTECTED\", target.get(\"IsPasswordProtected\", False))).strip().lower()\npassword_enabled = password_mode in {\"1\", \"true\", \"yes\", \"y\", \"on\"}\npassword = read_env(\"SERVER_PASSWORD\", target.get(\"Password\", \"\"))\n\ntarget[\"InviteCode\"] = invite\ntarget[\"ServerName\"] = server_name\ntry:\n    target[\"MaxPlayerCount\"] = int(max_players)\nexcept Exception:\n    pass\ntarget[\"P2pProxyAddress\"] = proxy\ntarget[\"IsPasswordProtected\"] = bool(password_enabled)\ntarget[\"Password\"] = password if password_enabled else \"\"\n\nwith open(path, \"w\", encoding=\"utf-8\") as fp:\n    json.dump(data, fp, indent=2)\n    fp.write(\"\\n\")\nPY\nelse\n  echo \"WARNING: python3 not found; skipping ServerDescription.json env patching\"\nfi\n\n# Mirror ServerDescription.json up to /home/container so it is discoverable\n# via SFTP at the server root too (read-only informational copy).\ncp -f \"ServerDescription.json\" \"/home/container/ServerDescription.json\" || true\n\nEXTRA_ARGS=()\nif [[ -n \"${BIND_IP:-}\" ]]; then\n  EXTRA_ARGS+=(\"-MULTIHOME=${BIND_IP}\")\nfi\nif [[ -n \"${GAME_PORT:-}\" ]]; then\n  EXTRA_ARGS+=(\"-PORT=${GAME_PORT}\")\nfi\nif [[ -n \"${QUERY_PORT:-}\" ]]; then\n  EXTRA_ARGS+=(\"-QUERYPORT=${QUERY_PORT}\")\nfi\n\nif [[ -n \"$SERVER_EXE\" ]]; then\n  echo \"Launching (direct exe from $SERVER_DIR): ./$SERVER_NAMEONLY ${EXTRA_ARGS[*]}\"\n  LAUNCH=(wine \"./$SERVER_NAMEONLY\")\nelse\n  echo \"--- ./$SERVER_NAMEONLY contents: ---\"\n  cat \"./$SERVER_NAMEONLY\" || true\n  echo \"--- end ./$SERVER_NAMEONLY ---\"\n  echo \"Launching (via .bat from $SERVER_DIR): ./$SERVER_NAMEONLY ${EXTRA_ARGS[*]}\"\n  LAUNCH=(wine cmd /c \"./$SERVER_NAMEONLY\")\nfi\n\nif command -v xvfb-run >/dev/null 2>&1; then\n  exec xvfb-run -a \"${LAUNCH[@]}\" \"${EXTRA_ARGS[@]}\"\nelse\n  exec \"${LAUNCH[@]}\" \"${EXTRA_ARGS[@]}\"\nfi\nSH\nchmod +x /mnt/server/start-windrose.sh\n\n# 2) Fetch SteamCMD if missing.\nif [[ ! -x \"./steamcmd/steamcmd.sh\" ]]; then\n  mkdir -p steamcmd\n  echo \"Downloading SteamCMD...\"\n  curl -sSL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xz -C steamcmd\nfi\n\n# 3) Wipe any stale/partial appmanifest so a prior failed run doesn't keep\n#    producing 'Missing configuration' on +app_update validate.\nrm -f \"/mnt/server/steamapps/appmanifest_3041230.acf\" || true\nrm -f \"/mnt/server/steamapps/appmanifest_4129620.acf\" || true\nrm -f \"/mnt/server/steamapps/appmanifest_${STEAM_APPID:-4129620}.acf\" || true\n\n# 4) Require credentials for SteamCMD install/update. Some Windrose server installs require account login even for the dedicated server app.\nif [[ -z \"${STEAM_USER:-}\" || -z \"${STEAM_PASS:-}\" ]]; then\n  echo \"ERROR: STEAM_USER and STEAM_PASS must be set on the server's Startup tab.\"\n  echo \"       Use a Steam account that can access the Windrose Dedicated Server (AppID ${STEAM_APPID:-4129620}).\"\n  echo \"       If the account has Steam Guard enabled, also set STEAM_GUARD on the\"\n  echo \"       first install only; SteamCMD caches the machine token afterwards.\"\n  exit 1\nfi\n\nLOGIN_ARGS=(+login \"${STEAM_USER}\" \"${STEAM_PASS}\")\nif [[ -n \"${STEAM_GUARD:-}\" ]]; then\n  LOGIN_ARGS+=(\"${STEAM_GUARD}\")\nfi\n\n# 5) Run SteamCMD. +@sSteamCmdForcePlatformType MUST come *after* +login\n#    because +login resets the platform type back to the host OS.\n./steamcmd/steamcmd.sh \\\n  +@NoPromptForPassword 1 \\\n  +force_install_dir /mnt/server \\\n  \"${LOGIN_ARGS[@]}\" \\\n  +@sSteamCmdForcePlatformType windows \\\n  +app_info_update 1 \\\n  +app_update \"${STEAM_APPID:-4129620}\" validate \\\n  +quit\n\n# 6) Flatten any nested installdir (some SteamCMD builds nest by app name).\nif [[ -d \"/mnt/server/Windrose\" ]] && compgen -G \"/mnt/server/Windrose/*\" > /dev/null; then\n  echo \"Detected nested installdir folder; flattening...\"\n  shopt -s dotglob\n  mv \"/mnt/server/Windrose\"/* /mnt/server/ || true\n  rmdir \"/mnt/server/Windrose\" || true\nfi\n\n# 7) Seed a default ServerDescription.json inside the server bundle if one\n#    isn't already there (install scripts should not clobber an existing one).\nSEED_DIR=\"\"\nfor cand in \\\n  \"/mnt/server/R5/Builds/WindowsServer\" \\\n  \"/mnt/server/R5/Builds/WindroseServer\"; do\n  if [[ -d \"$cand\" ]]; then\n    SEED_DIR=\"$cand\"\n    break\n  fi\ndone\n\nif [[ -n \"$SEED_DIR\" && ! -f \"$SEED_DIR/ServerDescription.json\" ]]; then\n  cat > \"$SEED_DIR/ServerDescription.json\" <<'JSON'\n{\n  \"Version\": 1,\n  \"DeploymentId\": \"\",\n  \"ServerDescription_Persistent\": {\n    \"PersistentServerId\": \"\",\n    \"InviteCode\": \"MyServer1\",\n    \"IsPasswordProtected\": false,\n    \"Password\": \"\",\n    \"ServerName\": \"Windrose Dedicated Server\",\n    \"WorldIslandId\": \"\",\n    \"MaxPlayerCount\": 4,\n    \"P2pProxyAddress\": \"\"\n  }\n}\nJSON\nfi\n\necho \"Install complete. Start script at /home/container/start-windrose.sh\"",
+            "container": "ghcr.io/parkervcp/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Steam Username",
+            "description": "Steam username used by SteamCMD during install/update.",
+            "env_variable": "STEAM_USER",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam Password",
+            "description": "Steam password used by SteamCMD during install/update.",
+            "env_variable": "STEAM_PASS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam Guard Code (first install only)",
+            "description": "Current Steam Guard code for first install/login only; clear after SteamCMD caches the machine token.",
+            "env_variable": "STEAM_GUARD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:16",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Name",
+            "description": "Display name for your server.",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Windrose Dedicated Server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Invite Code",
+            "description": "Players join via this InviteCode (min 6 chars; case-sensitive).",
+            "env_variable": "INVITE_CODE",
+            "default_value": "MyServer1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|min:6|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Password Protected",
+            "description": "true/false \u2014 require a password to join.",
+            "env_variable": "PASSWORD_PROTECTED",
+            "default_value": "false",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Password",
+            "description": "Password required if Password Protected is true.",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Players",
+            "description": "Maximum simultaneous players.",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "4",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "P2P Proxy Address",
+            "description": "P2pProxyAddress value in ServerDescription.json; usually blank.",
+            "env_variable": "P2P_PROXY_ADDRESS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Bind IP (optional)",
+            "description": "Optional -MULTIHOME bind address.",
+            "env_variable": "BIND_IP",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Game Port (optional)",
+            "description": "Optional -PORT argument. Windrose typically uses UDP 7777; leave blank to use defaults.",
+            "env_variable": "GAME_PORT",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|integer|min:1|max:65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Query Port (optional)",
+            "description": "Optional -QUERYPORT argument. Windrose typically uses UDP 7778; leave blank to use defaults.",
+            "env_variable": "QUERY_PORT",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|integer|min:1|max:65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Wine Debug",
+            "description": "Wine debug output control. Default '-all' reduces spam; set to 'warn+all,err+all' to debug startup failures.",
+            "env_variable": "WINEDEBUG",
+            "default_value": "-all",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam App ID",
+            "description": "Windrose Dedicated Server Steam app ID. Do not change unless the dedicated server app ID changes.",
+            "env_variable": "STEAM_APPID",
+            "default_value": "4129620",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string|max:20",
+            "field_type": "text"
+        }
+    ]
+}
