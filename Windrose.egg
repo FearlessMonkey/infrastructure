@@ -1,0 +1,133 @@
+{
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-04-16T00:00:00Z",
+  "name": "Windrose Dedicated Server (SteamCMD + Wine) — Corrected",
+  "author": "community@local",
+  "description": "Windrose Dedicated Server via SteamCMD (AppID 4129620) and Wine on Linux Docker. Creates ServerDescription.json during install to avoid pre-start config failures. Launches WindroseServer.exe with -log.",
+  "features": [
+    "steam_disk_space"
+  ],
+  "docker_images": {
+    "Wine (recommended)": "ghcr.io/parkervcp/yolks:wine_latest"
+  },
+  "file_denylist": [],
+  "startup": "bash -lc 'set -euo pipefail; cd /home/container; export WINEDEBUG=\"${WINEDEBUG:--all}\"; EXE=\"WindroseServer.exe\"; if [[ -f \"./${EXE}\" ]]; then :; elif [[ -f \"./R5/${EXE}\" ]]; then EXE=\"R5/${EXE}\"; else echo \"ERROR: WindroseServer.exe not found.\"; find . -maxdepth 3 -type f -iname \"WindroseServer*.exe\" -print || true; exit 1; fi; ARGS=\"-log\"; if [[ -n \"${BIND_IP:-}\" ]]; then ARGS+=\" -MULTIHOME=${BIND_IP}\"; fi; if [[ -n \"${GAME_PORT:-}\" ]]; then ARGS+=\" -PORT=${GAME_PORT}\"; fi; if [[ -n \"${QUERY_PORT:-}\" ]]; then ARGS+=\" -QUERYPORT=${QUERY_PORT}\"; fi; echo \"Launching: wine ${EXE} ${ARGS}\"; if command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a wine \"${EXE}\" ${ARGS}; else wine \"${EXE}\" ${ARGS}; fi'",
+  "config": {
+    "files": "{\r\n  \"ServerDescription.json\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"InviteCode\": \"{{server.build.env.INVITE_CODE}}\",\r\n      \"IsPasswordProtected\": \"{{server.build.env.PASSWORD_PROTECTED}}\",\r\n      \"Password\": \"{{server.build.env.SERVER_PASSWORD}}\",\r\n      \"ServerName\": \"{{server.build.env.SERVER_NAME}}\",\r\n      \"MaxPlayerCount\": \"{{server.build.env.MAX_PLAYERS}}\",\r\n      \"P2pProxyAddress\": \"{{server.build.env.P2P_PROXY_ADDRESS}}\"\r\n    }\r\n  },\r\n  \"R5/ServerDescription.json\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"InviteCode\": \"{{server.build.env.INVITE_CODE}}\",\r\n      \"IsPasswordProtected\": \"{{server.build.env.PASSWORD_PROTECTED}}\",\r\n      \"Password\": \"{{server.build.env.SERVER_PASSWORD}}\",\r\n      \"ServerName\": \"{{server.build.env.SERVER_NAME}}\",\r\n      \"MaxPlayerCount\": \"{{server.build.env.MAX_PLAYERS}}\",\r\n      \"P2pProxyAddress\": \"{{server.build.env.P2P_PROXY_ADDRESS}}\"\r\n    }\r\n  }\r\n}",
+    "startup": "{\r\n  \"done\": \"\"\r\n}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/bash\nset -euo pipefail\n\ncd /mnt/server\n\n# Install SteamCMD locally into the server directory\nif [[ ! -x \"./steamcmd/steamcmd.sh\" ]]; then\n  mkdir -p steamcmd\n  echo \"Downloading SteamCMD...\"\n  curl -sSL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xz -C steamcmd\nfi\n\n# Install Windrose Dedicated Server (Windows Tool) AppID 4129620\n./steamcmd/steamcmd.sh \\\n  +@sSteamCmdForcePlatformType windows \\\n  +force_install_dir /mnt/server \\\n  +login anonymous \\\n  +app_update 4129620 validate \\\n  +quit\n\n# Flatten if SteamCMD dropped files into an installdir subfolder (\"Windrose Dedicated Server\")\nif [[ -d \"/mnt/server/Windrose Dedicated Server\" ]] && compgen -G \"/mnt/server/Windrose Dedicated Server/*\" > /dev/null; then\n  echo \"Detected nested installdir folder; flattening...\"\n  shopt -s dotglob\n  mv \"/mnt/server/Windrose Dedicated Server\"/* /mnt/server/ || true\n  rmdir \"/mnt/server/Windrose Dedicated Server\" || true\nfi\n\n# Create minimal ServerDescription.json before first boot to avoid config pre-parse failures.\nif [[ ! -f \"/mnt/server/ServerDescription.json\" ]]; then\n  cat > /mnt/server/ServerDescription.json <<'JSON'\n{\n  \"PersistentServerId\": \"\",\n  \"InviteCode\": \"MyServer1\",\n  \"IsPasswordProtected\": false,\n  \"Password\": \"\",\n  \"ServerName\": \"Windrose Dedicated Server\",\n  \"WorldIslandId\": \"\",\n  \"MaxPlayerCount\": 4,\n  \"P2pProxyAddress\": \"\"\n}\nJSON\nfi\n\n# Ensure R5/ServerDescription.json exists too (symlink to root file)\nmkdir -p /mnt/server/R5\nif [[ ! -e \"/mnt/server/R5/ServerDescription.json\" ]]; then\n  ln -s ../ServerDescription.json /mnt/server/R5/ServerDescription.json\nfi\n\necho \"Install complete. Start the server; it will generate world save folders under R5/Saved/...\"",
+      "container": "ghcr.io/parkervcp/installers:debian",
+      "entrypoint": "bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Server Name",
+      "description": "Display name for your server.",
+      "env_variable": "SERVER_NAME",
+      "default_value": "Windrose Dedicated Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Invite Code",
+      "description": "Players join via this InviteCode (min 6 chars; case-sensitive).",
+      "env_variable": "INVITE_CODE",
+      "default_value": "MyServer1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|min:6|max:32",
+      "field_type": "text"
+    },
+    {
+      "name": "Password Protected",
+      "description": "true/false — require a password to join.",
+      "env_variable": "PASSWORD_PROTECTED",
+      "default_value": "false",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|in:true,false",
+      "field_type": "text"
+    },
+    {
+      "name": "Server Password",
+      "description": "Password required if Password Protected is true.",
+      "env_variable": "SERVER_PASSWORD",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Max Players",
+      "description": "Maximum simultaneous players.",
+      "env_variable": "MAX_PLAYERS",
+      "default_value": "4",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "P2P Proxy Address",
+      "description": "P2pProxyAddress in ServerDescription.json; usually blank.",
+      "env_variable": "P2P_PROXY_ADDRESS",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Bind IP (optional)",
+      "description": "Optional -MULTIHOME bind address.",
+      "env_variable": "BIND_IP",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Game Port (optional)",
+      "description": "Optional -PORT (leave blank unless you know fixed ports work for your deployment).",
+      "env_variable": "GAME_PORT",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|integer|min:1|max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Query Port (optional)",
+      "description": "Optional -QUERYPORT.",
+      "env_variable": "QUERY_PORT",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|integer|min:1|max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Wine Debug",
+      "description": "Wine debug output control. Default '-all' reduces spam.",
+      "env_variable": "WINEDEBUG",
+      "default_value": "-all",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
+    }
+  ]
+}
