@@ -4,9 +4,9 @@
     "update_url": null
   },
   "exported_at": "2026-04-16T00:00:00Z",
-  "name": "Windrose Dedicated Server (SteamCMD + Wine) — Corrected",
+  "name": "Windrose Dedicated Server (SteamCMD + Wine)",
   "author": "community@local",
-  "description": "Windrose Dedicated Server via SteamCMD (AppID 4129620) and Wine on Linux Docker. Creates ServerDescription.json during install to avoid pre-start config failures. Launches WindroseServer.exe with -log.",
+  "description": "Installs Windrose Dedicated Server (Steam AppID 4129620) via SteamCMD and runs WindroseServer.exe under Wine on Linux. Players join via InviteCode in ServerDescription.json.",
   "features": [
     "steam_disk_space"
   ],
@@ -14,16 +14,16 @@
     "Wine (recommended)": "ghcr.io/parkervcp/yolks:wine_latest"
   },
   "file_denylist": [],
-  "startup": "bash -lc 'set -euo pipefail; cd /home/container; export WINEDEBUG=\"${WINEDEBUG:--all}\"; EXE=\"WindroseServer.exe\"; if [[ -f \"./${EXE}\" ]]; then :; elif [[ -f \"./R5/${EXE}\" ]]; then EXE=\"R5/${EXE}\"; else echo \"ERROR: WindroseServer.exe not found.\"; find . -maxdepth 3 -type f -iname \"WindroseServer*.exe\" -print || true; exit 1; fi; ARGS=\"-log\"; if [[ -n \"${BIND_IP:-}\" ]]; then ARGS+=\" -MULTIHOME=${BIND_IP}\"; fi; if [[ -n \"${GAME_PORT:-}\" ]]; then ARGS+=\" -PORT=${GAME_PORT}\"; fi; if [[ -n \"${QUERY_PORT:-}\" ]]; then ARGS+=\" -QUERYPORT=${QUERY_PORT}\"; fi; echo \"Launching: wine ${EXE} ${ARGS}\"; if command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a wine \"${EXE}\" ${ARGS}; else wine \"${EXE}\" ${ARGS}; fi'",
+  "startup": "bash -lc 'set -euo pipefail; cd /home/container; export WINEDEBUG=\"${WINEDEBUG:--all}\"; # Ensure config exists\nif [[ ! -f \"ServerDescription.json\" ]]; then echo \"ServerDescription.json missing!\"; ls -la; exit 1; fi; # Pre-start patch (type-safe) using python3 (available in wine yolk)\npython3 - <<\"PY\"\nimport json, os\np = \"ServerDescription.json\"\nwith open(p, \"r\", encoding=\"utf-8\") as f:\n    data = json.load(f)\n\ndef get(name, default=\"\"):\n    return os.environ.get(name, default)\n\n# Apply env overrides\ninvite = get(\"INVITE_CODE\", data.get(\"InviteCode\", \"\"))\nname = get(\"SERVER_NAME\", data.get(\"ServerName\", \"\"))\nmaxp = get(\"MAX_PLAYERS\", data.get(\"MaxPlayerCount\", 4))\nproxy = get(\"P2P_PROXY_ADDRESS\", data.get(\"P2pProxyAddress\", \"\"))\n\n# Boolean parse for PASSWORD_PROTECTED\npp_raw = get(\"PASSWORD_PROTECTED\", str(data.get(\"IsPasswordProtected\", False)))\npp = str(pp_raw).strip().lower() in (\"1\", \"true\", \"yes\", \"y\", \"on\")\n\npw = get(\"SERVER_PASSWORD\", data.get(\"Password\", \"\"))\n\n# Write back\ndata[\"InviteCode\"] = invite\ndata[\"ServerName\"] = name\ntry:\n    data[\"MaxPlayerCount\"] = int(maxp)\nexcept Exception:\n    pass\ndata[\"P2pProxyAddress\"] = proxy\ndata[\"IsPasswordProtected\"] = bool(pp)\n# If not password protected, clear password to reduce confusion\ndata[\"Password\"] = pw if pp else \"\"\n\nwith open(p, \"w\", encoding=\"utf-8\") as f:\n    json.dump(data, f, indent=2)\nPY\n\n# Locate exe (SteamDB shows WindroseServer.exe)\nEXE=\"WindroseServer.exe\"; if [[ -f \"./${EXE}\" ]]; then :; elif [[ -f \"./R5/${EXE}\" ]]; then EXE=\"R5/${EXE}\"; else echo \"ERROR: WindroseServer.exe not found.\"; find . -maxdepth 3 -type f -iname \"WindroseServer*.exe\" -print || true; exit 1; fi;\n\nARGS=\"-log\"; if [[ -n \"${BIND_IP:-}\" ]]; then ARGS+=\" -MULTIHOME=${BIND_IP}\"; fi; if [[ -n \"${GAME_PORT:-}\" ]]; then ARGS+=\" -PORT=${GAME_PORT}\"; fi; if [[ -n \"${QUERY_PORT:-}\" ]]; then ARGS+=\" -QUERYPORT=${QUERY_PORT}\"; fi;\n\necho \"Launching: wine ${EXE} ${ARGS}\";\nif command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a wine \"${EXE}\" ${ARGS}; else wine \"${EXE}\" ${ARGS}; fi'",
   "config": {
-    "files": "{\r\n  \"ServerDescription.json\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"InviteCode\": \"{{server.build.env.INVITE_CODE}}\",\r\n      \"IsPasswordProtected\": \"{{server.build.env.PASSWORD_PROTECTED}}\",\r\n      \"Password\": \"{{server.build.env.SERVER_PASSWORD}}\",\r\n      \"ServerName\": \"{{server.build.env.SERVER_NAME}}\",\r\n      \"MaxPlayerCount\": \"{{server.build.env.MAX_PLAYERS}}\",\r\n      \"P2pProxyAddress\": \"{{server.build.env.P2P_PROXY_ADDRESS}}\"\r\n    }\r\n  },\r\n  \"R5/ServerDescription.json\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"InviteCode\": \"{{server.build.env.INVITE_CODE}}\",\r\n      \"IsPasswordProtected\": \"{{server.build.env.PASSWORD_PROTECTED}}\",\r\n      \"Password\": \"{{server.build.env.SERVER_PASSWORD}}\",\r\n      \"ServerName\": \"{{server.build.env.SERVER_NAME}}\",\r\n      \"MaxPlayerCount\": \"{{server.build.env.MAX_PLAYERS}}\",\r\n      \"P2pProxyAddress\": \"{{server.build.env.P2P_PROXY_ADDRESS}}\"\r\n    }\r\n  }\r\n}",
+    "files": "{\r\n  \"ServerDescription.json\": {\r\n    \"parser\": \"json\",\r\n    \"find\": {\r\n      \"InviteCode\": \"{{server.environment.INVITE_CODE}}\",\r\n      \"ServerName\": \"{{server.environment.SERVER_NAME}}\",\r\n      \"MaxPlayerCount\": \"{{server.environment.MAX_PLAYERS}}\",\r\n      \"P2pProxyAddress\": \"{{server.environment.P2P_PROXY_ADDRESS}}\"\r\n    }\r\n  }\r\n}",
     "startup": "{\r\n  \"done\": \"\"\r\n}",
     "logs": "{}",
     "stop": "^C"
   },
   "scripts": {
     "installation": {
-      "script": "#!/bin/bash\nset -euo pipefail\n\ncd /mnt/server\n\n# Install SteamCMD locally into the server directory\nif [[ ! -x \"./steamcmd/steamcmd.sh\" ]]; then\n  mkdir -p steamcmd\n  echo \"Downloading SteamCMD...\"\n  curl -sSL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xz -C steamcmd\nfi\n\n# Install Windrose Dedicated Server (Windows Tool) AppID 4129620\n./steamcmd/steamcmd.sh \\\n  +@sSteamCmdForcePlatformType windows \\\n  +force_install_dir /mnt/server \\\n  +login anonymous \\\n  +app_update 4129620 validate \\\n  +quit\n\n# Flatten if SteamCMD dropped files into an installdir subfolder (\"Windrose Dedicated Server\")\nif [[ -d \"/mnt/server/Windrose Dedicated Server\" ]] && compgen -G \"/mnt/server/Windrose Dedicated Server/*\" > /dev/null; then\n  echo \"Detected nested installdir folder; flattening...\"\n  shopt -s dotglob\n  mv \"/mnt/server/Windrose Dedicated Server\"/* /mnt/server/ || true\n  rmdir \"/mnt/server/Windrose Dedicated Server\" || true\nfi\n\n# Create minimal ServerDescription.json before first boot to avoid config pre-parse failures.\nif [[ ! -f \"/mnt/server/ServerDescription.json\" ]]; then\n  cat > /mnt/server/ServerDescription.json <<'JSON'\n{\n  \"PersistentServerId\": \"\",\n  \"InviteCode\": \"MyServer1\",\n  \"IsPasswordProtected\": false,\n  \"Password\": \"\",\n  \"ServerName\": \"Windrose Dedicated Server\",\n  \"WorldIslandId\": \"\",\n  \"MaxPlayerCount\": 4,\n  \"P2pProxyAddress\": \"\"\n}\nJSON\nfi\n\n# Ensure R5/ServerDescription.json exists too (symlink to root file)\nmkdir -p /mnt/server/R5\nif [[ ! -e \"/mnt/server/R5/ServerDescription.json\" ]]; then\n  ln -s ../ServerDescription.json /mnt/server/R5/ServerDescription.json\nfi\n\necho \"Install complete. Start the server; it will generate world save folders under R5/Saved/...\"",
+      "script": "#!/bin/bash\nset -euo pipefail\n\ncd /mnt/server\n\n# Install SteamCMD locally into the server directory\nif [[ ! -x \"./steamcmd/steamcmd.sh\" ]]; then\n  mkdir -p steamcmd\n  echo \"Downloading SteamCMD...\"\n  curl -sSL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xz -C steamcmd\nfi\n\n# Install Windrose Dedicated Server (Windows Tool) AppID 4129620\n./steamcmd/steamcmd.sh \\\n  +@sSteamCmdForcePlatformType windows \\\n  +force_install_dir /mnt/server \\\n  +login anonymous \\\n  +app_update 4129620 validate \\\n  +quit\n\n# Flatten if SteamCMD dropped files into an installdir subfolder\nif [[ -d \"/mnt/server/Windrose Dedicated Server\" ]] && compgen -G \"/mnt/server/Windrose Dedicated Server/*\" > /dev/null; then\n  echo \"Detected nested installdir folder; flattening...\"\n  shopt -s dotglob\n  mv \"/mnt/server/Windrose Dedicated Server\"/* /mnt/server/ || true\n  rmdir \"/mnt/server/Windrose Dedicated Server\" || true\nfi\n\n# Create minimal ServerDescription.json before first boot so Wings config parsing won't fail.\nif [[ ! -f \"/mnt/server/ServerDescription.json\" ]]; then\n  cat > /mnt/server/ServerDescription.json <<'JSON'\n{\n  \"PersistentServerId\": \"\",\n  \"InviteCode\": \"MyServer1\",\n  \"IsPasswordProtected\": false,\n  \"Password\": \"\",\n  \"ServerName\": \"Windrose Dedicated Server\",\n  \"WorldIslandId\": \"\",\n  \"MaxPlayerCount\": 4,\n  \"P2pProxyAddress\": \"\"\n}\nJSON\nfi\n\necho \"Install complete. Start the server; it will generate world save folders under R5/Saved/...\"",
       "container": "ghcr.io/parkervcp/installers:debian",
       "entrypoint": "bash"
     }
@@ -51,7 +51,7 @@
     },
     {
       "name": "Password Protected",
-      "description": "true/false — require a password to join.",
+      "description": "true/false — require a password to join. (Applied at runtime by python prestart.)",
       "env_variable": "PASSWORD_PROTECTED",
       "default_value": "false",
       "user_viewable": true,
@@ -101,7 +101,7 @@
     },
     {
       "name": "Game Port (optional)",
-      "description": "Optional -PORT (leave blank unless you know fixed ports work for your deployment).",
+      "description": "Optional -PORT.",
       "env_variable": "GAME_PORT",
       "default_value": "",
       "user_viewable": true,
